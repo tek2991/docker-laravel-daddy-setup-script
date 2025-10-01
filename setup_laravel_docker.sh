@@ -17,11 +17,16 @@ prompt_for_input() {
     local var_name=$2
     local validation_func=$3
     local default_value=$4
+    local is_secret=$5 # NEW: Flag to hide input
 
     while true; do
         # Display prompt with default value if provided
         if [ -n "$default_value" ]; then
             read -p "$prompt_msg (Default: $default_value): " input
+        elif [ "$is_secret" = "true" ]; then
+            # Hide input for secrets
+            read -r -p "$prompt_msg: " -s input
+            echo # Add a newline after hidden input
         else
             read -p "$prompt_msg: " input
         fi
@@ -56,6 +61,20 @@ validate_directory() {
     return 0
 }
 
+# Check if Docker is running
+check_docker() {
+    if ! command -v docker &> /dev/null; then
+        echo "🚨 ERROR: Docker command not found."
+        echo "Please install Docker Engine before running this script."
+        exit 1
+    fi
+    if ! docker info &> /dev/null; then
+        echo "🚨 ERROR: Docker daemon is not running."
+        echo "Please start Docker Desktop or the Docker service and try again."
+        exit 1
+    fi
+}
+
 # --- Main Script ---
 
 echo "==================================================="
@@ -63,15 +82,16 @@ echo "    Laravel Docker Setup Script (PHP $PHP_VERSION, Caddy)"
 echo "==================================================="
 
 # 1. Get Project Details
-prompt_for_input "Enter the **Project Name** (e.g., my-blog-app)" "PROJECT_NAME"
-prompt_for_input "Enter the **Installation Directory** (e.g., /Users/user/Projects)" "INSTALL_DIR" validate_directory
+prompt_for_input "Enter the **Project Name** (e.g., my-blog-app)" "PROJECT_NAME" "" "" "false"
+prompt_for_input "Enter the **Installation Directory** (e.g., /Users/user/Projects)" "INSTALL_DIR" validate_directory "" "false"
 
 # 2. Get Custom Credentials and Port
 echo "--- Customizing Environment Variables ---"
-prompt_for_input "Enter the **Host Port** for HTTP access" "WEB_HOST_PORT" "" "8000"
-prompt_for_input "Enter the **Database Name**" "DB_DATABASE" "" "laravel_db"
-prompt_for_input "Enter the **Database User**" "DB_USERNAME" "" "docker_user"
-prompt_for_input "Enter the **Database Password** (REQUIRED)" "DB_PASSWORD"
+prompt_for_input "Enter the **Host Port** for HTTP access" "WEB_HOST_PORT" "" "8000" "false"
+prompt_for_input "Enter the **Database Name**" "DB_DATABASE" "" "laravel_db" "false"
+prompt_for_input "Enter the **Database User**" "DB_USERNAME" "" "docker_user" "false"
+# Password input is now hidden (secure)
+prompt_for_input "Enter the **Database Password** (REQUIRED)" "DB_PASSWORD" "" "" "true" 
 
 PROJECT_DIR="$INSTALL_DIR/$PROJECT_NAME"
 
@@ -98,10 +118,9 @@ cd "$PROJECT_DIR" || exit
 echo "Creating subdirectories..."
 mkdir -p src docker/php docker/caddy
 
-# 5. Create Blueprints and Configuration Files (using variables)
+# 5. Create Blueprints and Configuration Files
 
 # --- A. .env.example (Template for Configuration) ---
-# Note: The .env.example contains the variables themselves, not the user's input values.
 cat << EOF > .env.example
 # --- Host/Network Configuration ---
 WEB_HOST_PORT=8000
@@ -144,7 +163,6 @@ APP_KEY=
 EOF
 
 # --- C. .gitignore ---
-# (Content remains the same as before)
 cat << EOF > .gitignore
 # Sensitive Data
 .env
@@ -161,7 +179,7 @@ caddy_data
 *.log
 EOF
 
-# --- D. docker/php/Dockerfile --- (Unchanged)
+# --- D. docker/php/Dockerfile ---
 cat << EOF > docker/php/Dockerfile
 FROM php:${PHP_VERSION}-fpm-alpine
 
@@ -179,7 +197,7 @@ WORKDIR /var/www
 EXPOSE 9000
 EOF
 
-# --- E. docker/caddy/Caddyfile --- (Unchanged)
+# --- E. docker/caddy/Caddyfile ---
 cat << EOF > docker/caddy/Caddyfile
 # Uses the DOMAIN variable defined in the .env file
 {\${DOMAIN}} {
@@ -198,7 +216,7 @@ cat << EOF > docker/caddy/Caddyfile
 }
 EOF
 
-# --- F. docker-compose.yml --- (Uses PROJECT_NAME variable for container names)
+# --- F. docker-compose.yml ---
 cat << EOF > docker-compose.yml
 version: '3.8'
 
@@ -271,6 +289,8 @@ EOF
 echo "All configuration files created successfully in $PROJECT_DIR."
 
 # 6. Execute Setup Commands
+echo "--- Checking Docker Status ---"
+check_docker
 
 echo "--- Executing Docker Setup Commands ---"
 
