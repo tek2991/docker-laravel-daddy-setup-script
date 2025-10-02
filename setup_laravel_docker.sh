@@ -194,6 +194,7 @@ APP_URL=http://$DOMAIN_NAME:\${WEB_HOST_PORT}
 APP_KEY=$APP_KEY_BASH_GENERATED 
 EOF
 echo "   -> Created .env file with secrets."
+unset DB_PASSWORD
 
 # --- B. .env.example (No Secrets)
 cat << EOF > .env.example
@@ -233,6 +234,7 @@ cat << EOF > .gitignore
 
 # Docker Local Overrides
 docker-compose.override.yml
+docker-compose.production.yml
 
 # Laravel Build Artifacts
 /vendor
