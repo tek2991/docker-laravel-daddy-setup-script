@@ -10,6 +10,7 @@ DB_USERNAME="docker_user"
 DB_PASSWORD=""
 DEPLOY_ENV="local"
 DOMAIN_NAME="localhost"
+DB_HOST_PORT="33061" # NEW DEFAULT PORT
 
 # --- Functions ---
 
@@ -66,10 +67,10 @@ validate_directory() {
 # Check if Docker is running
 check_docker() {
     if ! command -v docker &> /dev/null; then
-        echo "🚨 ERROR: Docker command not found." ; exit 1
+        echo "? ERROR: Docker command not found." ; exit 1
     fi
     if ! docker info &> /dev/null; then
-        echo "🚨 ERROR: Docker daemon is not running." ; exit 1
+        echo "? ERROR: Docker daemon is not running." ; exit 1
     fi
 }
 
@@ -121,6 +122,8 @@ else
     DOMAIN_NAME="localhost" # Ensure it is set to localhost
 fi
 
+echo "--- Database Configuration ---"
+prompt_for_input "Enter the **Host Port** for Database access (Default: 33061)" "DB_HOST_PORT" "" "$DB_HOST_PORT" "false"
 prompt_for_input "Enter the **Database Name**" "DB_DATABASE" "" "$DB_DATABASE" "false"
 prompt_for_input "Enter the **Database User**" "DB_USERNAME" "" "$DB_USERNAME" "false"
 prompt_for_input "Enter the **Database Password** (REQUIRED)" "DB_PASSWORD" "" "" "true" 
@@ -150,7 +153,7 @@ elif command -v head &> /dev/null && command -v base64 &> /dev/null; then
     APP_KEY_BASH_GENERATED="base64:$(head /dev/urandom | base64 | tr -d '\n' | head -c 44)"
     echo "   -> Key generated using head/base64 fallback."
 else
-    echo "🚨 ERROR: Neither openssl nor base64 utilities found to generate APP_KEY. Aborting."
+    echo "? ERROR: Neither openssl nor base64 utilities found to generate APP_KEY. Aborting."
     exit 1
 fi
 
@@ -170,10 +173,19 @@ DOMAIN=$DOMAIN_NAME
 # --- Database Configuration ---
 DB_CONNECTION=mysql
 DB_HOST=db
+# The internal port used by the app container
 DB_PORT=3306
+# The host port used for external connections is $DB_HOST_PORT
 DB_DATABASE=$DB_DATABASE
 DB_USERNAME=$DB_USERNAME
 DB_PASSWORD=$DB_PASSWORD
+
+# --- Database Configuration (MySQL Container Initialization) ---
+# NOTE: These variables are required by the 'mysql:8.0' image entrypoint.
+MYSQL_ROOT_PASSWORD=$DB_PASSWORD
+MYSQL_DATABASE=$DB_DATABASE
+MYSQL_USER=$DB_USERNAME
+MYSQL_PASSWORD=$DB_PASSWORD
 
 # --- Laravel Application Configuration ---
 APP_ENV=$DEPLOY_ENV
@@ -192,10 +204,19 @@ DOMAIN=$DOMAIN_NAME
 # --- Database Configuration ---
 DB_CONNECTION=mysql
 DB_HOST=db
+# The internal port used by the app container
 DB_PORT=3306
+# The host port used for external connections is $DB_HOST_PORT
 DB_DATABASE=$DB_DATABASE
 DB_USERNAME=$DB_USERNAME
 DB_PASSWORD=
+
+# --- Database Configuration (MySQL Container Initialization) ---
+# NOTE: These variables are required by the 'mysql:8.0' image entrypoint.
+MYSQL_ROOT_PASSWORD=
+MYSQL_DATABASE=$DB_DATABASE
+MYSQL_USER=$DB_USERNAME
+MYSQL_PASSWORD=
 
 # --- Laravel Application Configuration ---
 APP_ENV=$DEPLOY_ENV
@@ -209,6 +230,9 @@ echo "   -> Created clean .env.example file."
 cat << EOF > .gitignore
 # Sensitive Data
 .env
+
+# Docker Local Overrides
+docker-compose.override.yml
 
 # Laravel Build Artifacts
 /vendor
@@ -277,11 +301,12 @@ services:
     build:
       context: ./docker/php
       dockerfile: Dockerfile
+    # REMARK: Unique name for this project's app container
     container_name: ${PROJECT_NAME}_app
     working_dir: /var/www/src/
-    command: php-fpm
     volumes:
       - ./src:/var/www/src
+    # REMARK: Loads application environment variables from the .env file
     env_file:
       - .env
     networks:
@@ -290,18 +315,21 @@ services:
   # 2. Caddy Web Server Service (web)
   web:
     image: caddy:2-alpine
+    # REMARK: Unique name for this project's web container
     container_name: ${PROJECT_NAME}_web
     ports:
-      # Expose the configured host port for HTTP, and 443 for Caddy's HTTPS
-      - "\${WEB_HOST_PORT}:80" 
+      # LOCAL USE: This port is mapped in the local override file.
+      # PRODUCTION CHANGE: UNCOMMENT '80:80' and ensure '443:443' is kept.
+      # - "80:80"
       - "443:443"
     volumes:
       - ./src:/var/www/src
-      # DYNAMIC MOUNT
+      # DYNAMIC MOUNT: Caddyfile used is determined by DEPLOY_ENV variable.
       - ./docker/caddy/$CADDY_CONFIG_FILE:/etc/caddy/Caddyfile 
       - caddy_data:/data
     environment:
-      DOMAIN: \${DOMAIN} 
+      # PRODUCTION CHANGE: Set the live domain name in your production .env file.
+      DOMAIN: ${DOMAIN_NAME}
     depends_on:
       - app
     networks:
@@ -310,17 +338,21 @@ services:
   # 3. Database Service (db)
   db:
     image: mysql:8.0
+    # REMARK: Unique name for this project's database container
     container_name: ${PROJECT_NAME}_db
-    environment:
-      MYSQL_ROOT_PASSWORD: \${DB_PASSWORD}
-      MYSQL_DATABASE: \${DB_DATABASE}
-      MYSQL_USER: \${DB_USERNAME}
-      MYSQL_PASSWORD: \${DB_PASSWORD}
+    # PORTS ARE REMOVED HERE and defined in the local override/production file for security.
+    # PRODUCTION CHANGE: REMOVE the entire 'ports' section for security.
+    # ports:
+      # - "\${DB_HOST_PORT:-33061}:3306"
+    
+    # REMARK: Loads all DB credentials from the .env file.
+    env_file:
+      - .env
+    
     volumes:
       - db-data:/var/lib/mysql
     networks:
       - laravel-net
-
 networks:
   laravel-net:
     driver: bridge
@@ -333,6 +365,26 @@ volumes:
 EOF
 echo "   -> Created all Caddy and Docker Compose files."
 
+
+# --- H. docker-compose.override.yml (The local file, IGNORED by Git)
+cat << EOF > docker-compose.override.yml
+# This file overrides the base docker-compose.yml with local, user-specific settings.
+# It should be EXCLUDED from version control via .gitignore.
+
+services:
+  # 2. Caddy Web Server Service (web)
+  web:
+    ports:
+      # REMARK: Overrides the host port for local HTTP access.
+      - "${WEB_HOST_PORT}:80"
+
+  # 3. Database Service (db)
+  db:
+    ports:
+      # REMARK: Exposes the DB internal port (3306) to the host machine (for tools).
+      - "${DB_HOST_PORT}:3306"
+EOF
+echo "    -> Created docker-compose.override.yml for local settings."
 
 # 5. Execute Setup Commands
 echo "--- Checking Docker Status ---"
@@ -372,7 +424,7 @@ fi
 
 # 6. Final Instructions
 echo "==================================================="
-echo "✅ SETUP COMPLETE! Your project is ready."
+echo "? SETUP COMPLETE! Your project is ready."
 echo "==================================================="
 echo "Project Location: $PROJECT_DIR"
 if [[ "$DEPLOY_ENV" == "production" ]]; then
@@ -381,6 +433,11 @@ else
     echo "Access URL: http://localhost:$WEB_HOST_PORT"
 fi
 echo "Environment: $DEPLOY_ENV"
+echo "---------------------------------------------------"
+echo "DATABASE HOST CONNECTION DETAILS:"
+echo "Host: localhost"
+echo "Port: $DB_HOST_PORT"
+echo "User: $DB_USERNAME"
 echo "---------------------------------------------------"
 echo "NEXT STEPS:"
 echo "1. Source your shell profile (e.g., ~/.bashrc or ~/.zshrc) after adding aliases."
