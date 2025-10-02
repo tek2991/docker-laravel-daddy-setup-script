@@ -1,13 +1,15 @@
 #!/bin/bash
 
-# --- Configuration ---
+# --- Configuration (Defaults) ---
 PHP_VERSION="8.4"
 PROJECT_NAME=""
 INSTALL_DIR=""
-WEB_HOST_PORT=""
-DB_DATABASE=""
-DB_USERNAME=""
+WEB_HOST_PORT="8000"
+DB_DATABASE="laravel_db"
+DB_USERNAME="docker_user"
 DB_PASSWORD=""
+DEPLOY_ENV="local"
+DOMAIN_NAME="localhost"
 
 # --- Functions ---
 
@@ -17,26 +19,25 @@ prompt_for_input() {
     local var_name=$2
     local validation_func=$3
     local default_value=$4
-    local is_secret=$5 # NEW: Flag to hide input
+    local is_secret=$5
 
     while true; do
-        # Display prompt with default value if provided
+        local current_default=""
         if [ -n "$default_value" ]; then
-            read -p "$prompt_msg (Default: $default_value): " input
-        elif [ "$is_secret" = "true" ]; then
-            # Hide input for secrets
+            current_default=" (Default: $default_value)"
+        fi
+        
+        if [ "$is_secret" = "true" ]; then
             read -r -p "$prompt_msg: " -s input
-            echo # Add a newline after hidden input
+            echo 
         else
-            read -p "$prompt_msg: " input
+            read -p "$prompt_msg$current_default: " input
         fi
 
-        # Use default value if input is empty and a default exists
         if [ -z "$input" ] && [ -n "$default_value" ]; then
             input="$default_value"
         fi
 
-        # Run custom validation function if provided
         if [ -n "$validation_func" ]; then
             if ! "$validation_func" "$input"; then
                 continue
@@ -52,8 +53,9 @@ prompt_for_input() {
     done
 }
 
-# Simple validation for non-empty directory
+# Validation for non-empty and existing directory
 validate_directory() {
+    if [ "$1" == "." ]; then return 0; fi
     if [ ! -d "$1" ]; then
         echo "The directory '$1' does not exist. Please create it first or provide an existing path."
         return 1
@@ -64,15 +66,36 @@ validate_directory() {
 # Check if Docker is running
 check_docker() {
     if ! command -v docker &> /dev/null; then
-        echo "🚨 ERROR: Docker command not found."
-        echo "Please install Docker Engine before running this script."
-        exit 1
+        echo "🚨 ERROR: Docker command not found." ; exit 1
     fi
     if ! docker info &> /dev/null; then
-        echo "🚨 ERROR: Docker daemon is not running."
-        echo "Please start Docker Desktop or the Docker service and try again."
-        exit 1
+        echo "🚨 ERROR: Docker daemon is not running." ; exit 1
     fi
+}
+
+# Wait for the MySQL container to be ready
+wait_for_db() {
+    echo "   -> Waiting for database to become ready (Max 30s)..."
+    local attempts=0
+    while ! docker compose exec db mysqladmin ping -h db --silent &> /dev/null; do
+        sleep 2
+        attempts=$((attempts+1))
+        if [ $attempts -ge 15 ]; then
+            echo "   -> ERROR: Database failed to start within 30 seconds. Check 'docker compose logs db'."
+            exit 1
+        fi
+    done
+    echo "   -> Database is ready."
+}
+
+# Validation for environment selection
+validate_env() {
+    local env_input=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+    if [[ "$env_input" != "local" && "$env_input" != "production" ]]; then
+        echo "Invalid choice. Please enter 'local' or 'production'."
+        return 1
+    fi
+    return 0
 }
 
 # --- Main Script ---
@@ -83,14 +106,23 @@ echo "==================================================="
 
 # 1. Get Project Details
 prompt_for_input "Enter the **Project Name** (e.g., my-blog-app)" "PROJECT_NAME" "" "" "false"
-prompt_for_input "Enter the **Installation Directory** (e.g., /Users/user/Projects)" "INSTALL_DIR" validate_directory "" "false"
+prompt_for_input "Enter the **Installation Directory**" "INSTALL_DIR" validate_directory "." "false"
 
-# 2. Get Custom Credentials and Port
+# 2. Get Custom Credentials and Environment
 echo "--- Customizing Environment Variables ---"
-prompt_for_input "Enter the **Host Port** for HTTP access" "WEB_HOST_PORT" "" "8000" "false"
-prompt_for_input "Enter the **Database Name**" "DB_DATABASE" "" "laravel_db" "false"
-prompt_for_input "Enter the **Database User**" "DB_USERNAME" "" "docker_user" "false"
-# Password input is now hidden (secure)
+prompt_for_input "Enter the **Deployment Environment** ('local' or 'production')" "DEPLOY_ENV" validate_env "$DEPLOY_ENV" "false"
+
+if [[ "$DEPLOY_ENV" == "production" ]]; then
+    prompt_for_input "Enter the **Domain Name** (e.g., myapp.com) for Caddy" "DOMAIN_NAME" "" "" "false"
+    WEB_HOST_PORT="443" # Force standard HTTPS port
+    echo "   -> Setting Host Port to 443 (HTTPS) for production."
+else
+    prompt_for_input "Enter the **Host Port** for HTTP access" "WEB_HOST_PORT" "" "$WEB_HOST_PORT" "false"
+    DOMAIN_NAME="localhost" # Ensure it is set to localhost
+fi
+
+prompt_for_input "Enter the **Database Name**" "DB_DATABASE" "" "$DB_DATABASE" "false"
+prompt_for_input "Enter the **Database User**" "DB_USERNAME" "" "$DB_USERNAME" "false"
 prompt_for_input "Enter the **Database Password** (REQUIRED)" "DB_PASSWORD" "" "" "true" 
 
 PROJECT_DIR="$INSTALL_DIR/$PROJECT_NAME"
@@ -99,13 +131,8 @@ PROJECT_DIR="$INSTALL_DIR/$PROJECT_NAME"
 if [ -d "$PROJECT_DIR" ]; then
     read -r -p "Directory '$PROJECT_DIR' already exists. Overwrite contents? (y/N): " response
     case "$response" in
-        [yY][eE][sS]|[yY]) 
-            echo "Proceeding with existing directory..."
-            ;;
-        *)
-            echo "Aborting setup. Please choose a different project name or directory."
-            exit 1
-            ;;
+        [yY][eE][sS]|[yY]) echo "Proceeding..." ;;
+        *) echo "Aborting setup." ; exit 1 ;;
     esac
 else
     echo "Creating project directory: $PROJECT_DIR"
@@ -114,38 +141,31 @@ fi
 
 cd "$PROJECT_DIR" || exit
 
-# 4. Create necessary subdirectories
-echo "Creating subdirectories..."
+# --- Generate APP_KEY ---
+echo "--- Generating Cryptographically Secure APP_KEY in Bash ---"
+if command -v openssl &> /dev/null; then
+    APP_KEY_BASH_GENERATED="base64:$(openssl rand -base64 32 | tr -d '\n')"
+    echo "   -> Key generated using OpenSSL."
+elif command -v head &> /dev/null && command -v base64 &> /dev/null; then
+    APP_KEY_BASH_GENERATED="base64:$(head /dev/urandom | base64 | tr -d '\n' | head -c 44)"
+    echo "   -> Key generated using head/base64 fallback."
+else
+    echo "🚨 ERROR: Neither openssl nor base64 utilities found to generate APP_KEY. Aborting."
+    exit 1
+fi
+
+# Determine Caddyfile to use based on environment
+CADDY_CONFIG_FILE="Caddyfile.$DEPLOY_ENV"
+
+# 4. Create Blueprints and Configuration Files
+echo "Creating subdirectories and configuration files..."
 mkdir -p src docker/php docker/caddy
 
-# 5. Create Blueprints and Configuration Files
-
-# --- A. .env.example (Template for Configuration) ---
-cat << EOF > .env.example
-# --- Host/Network Configuration ---
-WEB_HOST_PORT=8000
-DOMAIN=localhost
-
-# --- Database Configuration ---
-DB_CONNECTION=mysql
-DB_HOST=db
-DB_PORT=3306
-DB_DATABASE=laravel_db
-DB_USERNAME=docker_user
-DB_PASSWORD=password_secret
-
-# --- Laravel Application Configuration ---
-APP_ENV=local
-APP_DEBUG=true
-APP_URL=http://localhost:\${WEB_HOST_PORT}
-APP_KEY=
-EOF
-
-# --- B. .env (Local Copy with User's Values) ---
+# --- A. .env (Contains Secrets)
 cat << EOF > .env
 # --- Host/Network Configuration ---
 WEB_HOST_PORT=$WEB_HOST_PORT
-DOMAIN=localhost
+DOMAIN=$DOMAIN_NAME
 
 # --- Database Configuration ---
 DB_CONNECTION=mysql
@@ -156,13 +176,36 @@ DB_USERNAME=$DB_USERNAME
 DB_PASSWORD=$DB_PASSWORD
 
 # --- Laravel Application Configuration ---
-APP_ENV=local
+APP_ENV=$DEPLOY_ENV
 APP_DEBUG=true
-APP_URL=http://localhost:\${WEB_HOST_PORT}
+APP_URL=http://$DOMAIN_NAME:\${WEB_HOST_PORT}
+APP_KEY=$APP_KEY_BASH_GENERATED 
+EOF
+echo "   -> Created .env file with secrets."
+
+# --- B. .env.example (No Secrets)
+cat << EOF > .env.example
+# --- Host/Network Configuration ---
+WEB_HOST_PORT=$WEB_HOST_PORT
+DOMAIN=$DOMAIN_NAME
+
+# --- Database Configuration ---
+DB_CONNECTION=mysql
+DB_HOST=db
+DB_PORT=3306
+DB_DATABASE=$DB_DATABASE
+DB_USERNAME=$DB_USERNAME
+DB_PASSWORD=
+
+# --- Laravel Application Configuration ---
+APP_ENV=$DEPLOY_ENV
+APP_DEBUG=true
+APP_URL=http://\${DOMAIN}:\${WEB_HOST_PORT}
 APP_KEY=
 EOF
+echo "   -> Created clean .env.example file."
 
-# --- C. .gitignore ---
+# --- C. .gitignore
 cat << EOF > .gitignore
 # Sensitive Data
 .env
@@ -179,10 +222,11 @@ caddy_data
 *.log
 EOF
 
-# --- D. docker/php/Dockerfile ---
+# --- D. docker/php/Dockerfile (The missing file!)
 cat << EOF > docker/php/Dockerfile
 FROM php:${PHP_VERSION}-fpm-alpine
 
+# Install common dependencies
 RUN apk update && apk add --no-cache \\
     git \\
     curl \\
@@ -191,55 +235,55 @@ RUN apk update && apk add --no-cache \\
     && docker-php-ext-install pdo_mysql opcache zip \\
     && rm -rf /var/cache/apk/*
 
+# Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
 
 WORKDIR /var/www
 EXPOSE 9000
 EOF
+echo "   -> Created docker/php/Dockerfile."
 
-# --- E. docker/caddy/Caddyfile ---
-cat << EOF > docker/caddy/Caddyfile
-# Uses the DOMAIN variable defined in the .env file
-{\${DOMAIN}} {
 
+# --- E. docker/caddy/Caddyfile.local
+cat << EOF > docker/caddy/Caddyfile.local
+:80 {
     root * /var/www/src/public
-    
-    # Automatic HTTPS (handled by Caddy)
-
     try_files {path} {path}/ /index.php?{query}
-
-    # Pass PHP files to the PHP-FPM service (our 'app' container)
     php_fastcgi app:9000
-
     encode gzip
     log
 }
 EOF
 
-# --- F. docker-compose.yml ---
-cat << EOF > docker-compose.yml
-version: '3.8'
+# --- F. docker/caddy/Caddyfile.production
+cat << EOF > docker/caddy/Caddyfile.production
+\${DOMAIN} {
+    # Caddy handles automatic HTTPS using the domain from the .env file
+    # and redirects HTTP (port 80) to HTTPS (port 443)
+    
+    root * /var/www/src/public
+    try_files {path} {path}/ /index.php?{query}
+    php_fastcgi app:9000
+    encode gzip
+    log
+}
+EOF
 
+# --- G. docker-compose.yml (Using the dynamic Caddyfile mount)
+cat << EOF > docker-compose.yml
 services:
   # 1. PHP Application Service (app)
   app:
     build:
-      context: .
-      dockerfile: docker/php/Dockerfile
+      context: ./docker/php
+      dockerfile: Dockerfile
     container_name: ${PROJECT_NAME}_app
     working_dir: /var/www/src/
-    command: php artisan
+    command: php-fpm
     volumes:
       - ./src:/var/www/src
-    environment:
-      DB_HOST: \${DB_HOST}
-      DB_DATABASE: \${DB_DATABASE}
-      DB_USERNAME: \${DB_USERNAME}
-      DB_PASSWORD: \${DB_PASSWORD}
-      APP_ENV: \${APP_ENV}
-      APP_DEBUG: \${APP_DEBUG}
-      APP_URL: \${APP_URL}
-      APP_KEY: \${APP_KEY}
+    env_file:
+      - .env
     networks:
       - laravel-net
 
@@ -248,14 +292,16 @@ services:
     image: caddy:2-alpine
     container_name: ${PROJECT_NAME}_web
     ports:
-      - "\${WEB_HOST_PORT}:80"
+      # Expose the configured host port for HTTP, and 443 for Caddy's HTTPS
+      - "\${WEB_HOST_PORT}:80" 
       - "443:443"
     volumes:
       - ./src:/var/www/src
-      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile
+      # DYNAMIC MOUNT
+      - ./docker/caddy/$CADDY_CONFIG_FILE:/etc/caddy/Caddyfile 
       - caddy_data:/data
     environment:
-      DOMAIN: \${DOMAIN}
+      DOMAIN: \${DOMAIN} 
     depends_on:
       - app
     networks:
@@ -285,44 +331,59 @@ volumes:
   caddy_data:
     driver: local
 EOF
+echo "   -> Created all Caddy and Docker Compose files."
 
-echo "All configuration files created successfully in $PROJECT_DIR."
 
-# 6. Execute Setup Commands
+# 5. Execute Setup Commands
 echo "--- Checking Docker Status ---"
 check_docker
 
 echo "--- Executing Docker Setup Commands ---"
 
-# Build Image
+# 1. Build Image (This will now work)
 echo "1. Building the custom PHP image..."
 docker compose build
 
-# Create Laravel Project
+# 2. Create Laravel Project
 echo "2. Running Composer to create the Laravel project..."
+# We run composer in the 'app' container which has the PHP image built
 docker compose run --rm app composer create-project laravel/laravel /var/www/src
 
-# Start Containers
+# 3. Start Containers (Single Run)
 echo "3. Starting services (app, web, db) in detached mode..."
 docker compose up -d
 
-# Final Configuration
-echo "4. Generating Laravel application key and fixing permissions..."
-# Generate key
-docker compose exec app php /var/www/src/artisan key:generate
+# 4. Clear config cache and set Permissions
+echo "4. Clearing config cache and fixing directory permissions..."
+docker compose exec app php /var/www/src/artisan config:clear
 
-# Fix permissions
-docker compose exec app chmod -R 777 src/storage src/bootstrap/cache
+# Set Permissions
+docker compose exec app chmod -R 777 /var/www/src/storage /var/www/src/bootstrap/cache
 
-# 7. Final Instructions
+# 5. Prompt for Migrations (Database wait is essential here)
+read -r -p "5. Do you want to run database migrations now? (y/N): " run_migrations
+if [[ "$run_migrations" =~ ^[yY]$ ]]; then
+    wait_for_db 
+    echo "   -> Running migrations..."
+    docker compose exec app php /var/www/src/artisan migrate
+else
+    echo "   -> Skipping migrations."
+fi
+
+# 6. Final Instructions
 echo "==================================================="
 echo "✅ SETUP COMPLETE! Your project is ready."
 echo "==================================================="
 echo "Project Location: $PROJECT_DIR"
-echo "Access URL: http://localhost:$WEB_HOST_PORT"
+if [[ "$DEPLOY_ENV" == "production" ]]; then
+    echo "Access URL: https://$DOMAIN_NAME"
+else
+    echo "Access URL: http://localhost:$WEB_HOST_PORT"
+fi
+echo "Environment: $DEPLOY_ENV"
 echo "---------------------------------------------------"
 echo "NEXT STEPS:"
-echo "1. Add shell aliases (art & comp) to your ~/.bashrc or ~/.zshrc."
+echo "1. Source your shell profile (e.g., ~/.bashrc or ~/.zshrc) after adding aliases."
 echo "   alias art='cd $PROJECT_DIR && docker compose exec app php /var/www/src/artisan'"
 echo "   alias comp='cd $PROJECT_DIR && docker compose exec app composer'"
 echo "2. Start coding in the '$PROJECT_DIR/src' directory!"
