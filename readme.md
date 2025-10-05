@@ -96,6 +96,7 @@ Example structure after setup:
 - Local URL: `http://localhost:PORT`  
 - Horizon Dashboard: `http://localhost:PORT/horizon`  
 - Telescope Dashboard: `http://localhost:PORT/telescope`
+- View logs for the worker service: `docker compose logs -f project_worker`
 
 ### Database and Redis Connections
 
@@ -214,6 +215,8 @@ Run composer install: Although the script runs this locally, it's best practice 
  4. Check Status: Verify all services are running without errors. `docker compose ps`
  5. `docker compose logs -f web` (The Caddy logs should show it successfully obtaining a Let's Encrypt certificate for your domain.)
  6. Ensure your domain's A record is pointing to the remote server's IP address.
+ 7. Check worker status: `docker compose logs -f worker`
+
 
 ## 🛡️ Security: 
 - Double-check that no unnecessary ports (like 33061 or 6379) are publicly open in the server's firewall configuration.
