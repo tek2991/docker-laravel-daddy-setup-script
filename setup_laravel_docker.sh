@@ -389,6 +389,9 @@ services:
         working_dir: /var/www/src/
         volumes:
             - ./src:/var/www/src
+		# Expose Vite port internally to the docker network
+        expose:
+            - "5173"
         # REMARK: Loads application environment variables from the .env file
         env_file:
             - .env
@@ -489,6 +492,12 @@ cat << EOF > docker-compose.override.yml
 # It should be EXCLUDED from version control via .gitignore.
 
 services:
+	# 1. PHP Application Service (app)
+    web:
+        ports:
+            # REMARK: Exposes Vite HMR internal port (5173) to the host machine for dev.
+			# Remove this in production
+            - "5173:5173"
     # 2. Caddy Web Server Service (web)
     web:
         ports:
@@ -604,5 +613,6 @@ echo "1. Source your shell profile (e.g., ~/.bashrc or ~/.zshrc) after adding al
     echo "     alias comp='cd $PROJECT_DIR && docker compose exec app composer'"
 echo "2. Start coding in the '$PROJECT_DIR/src' directory!"
 echo "3. To stop: docker compose down (This stops app, web, db, redis, and worker)"
+echo "4. To enable Hot Module Replacement (HMR) for assets, run the Vite server inside the container in a separate terminal: docker compose exec app npm run dev"
 
 exit 0
