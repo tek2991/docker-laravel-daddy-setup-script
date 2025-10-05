@@ -289,9 +289,19 @@ echo "   -> Created docker/php/Dockerfile."
 # --- E. docker/caddy/Caddyfile.local
 cat << EOF > docker/caddy/Caddyfile.local
 :80 {
+    # 1. Set the root to the application's public folder
     root * /var/www/src/public
-    try_files {path} {path}/ /index.php?{query}
+
+    # 2. Caddy's dedicated PHP directive automatically handles
+    # the try_files logic: it checks if the requested file exists, 
+    # serves it if it does, otherwise it rewrites to index.php.
     php_fastcgi app:9000
+
+    # 3. Explicitly enable the file server. 
+    # Caddy is smart enough to serve files that exist before proxying.
+    file_server
+
+    # Additional Directives
     encode gzip
     log
 }
@@ -299,13 +309,23 @@ EOF
 
 # --- F. docker/caddy/Caddyfile.production
 cat << EOF > docker/caddy/Caddyfile.production
-\${DOMAIN} {
+${DOMAIN} {
     # Caddy handles automatic HTTPS using the domain from the .env file
     # and redirects HTTP (port 80) to HTTPS (port 443)
     
+    # 1. Set the root to the public directory
     root * /var/www/src/public
-    try_files {path} {path}/ /index.php?{query}
+    
+    # 2. Add the file_server directive to handle static assets
+    # This must come before (or be correctly handled by) the PHP proxy.
+    file_server 
+
+    # 3. Use the php_fastcgi directive to handle dynamic requests.
+    # This directive implicitly includes the necessary "try_files" logic 
+    # to send non-existing files to index.php.
     php_fastcgi app:9000
+    
+    # Other Directives
     encode gzip
     log
 }
@@ -418,6 +438,11 @@ docker compose build
 echo "2. Running Composer to create the Laravel project..."
 # We run composer in the 'app' container which has the PHP image built
 docker compose run --rm app composer create-project laravel/laravel /var/www/src
+
+# NPM INSTALL
+echo "2.5. Installing front-end dependencies with npm..."
+# We use 'docker compose run' again to execute npm in the same temporary container
+docker compose run --rm app npm install
 
 # 3. Start Containers (Single Run)
 echo "3. Starting services (app, web, db) in detached mode..."
