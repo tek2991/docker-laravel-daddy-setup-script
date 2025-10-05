@@ -1,147 +1,175 @@
+# Laravel Docker Setup Script with Caddy, MySQL & Redis
 
-# 🚀 Dockerized Laravel Development Environment (PHP 8.4, Caddy/Automatic HTTPS)
+This script automates the creation of a robust, containerized **development and production environment** for Laravel applications. It interactively prompts for configuration details and generates all necessary Docker and Laravel configuration files, including services for the web server, database, caching, and queue workers.
 
-This repository contains a modern, production-ready setup for developing Laravel applications using Docker Compose. It leverages **Caddy** as a reverse proxy for automatic local and production HTTPS management, replacing the need for separate Nginx and Certbot configurations.
+---
 
-## ✨ Features
+## 🚀 Features
 
-* **Custom PHP 8.4 FPM/Alpine Image:** Lightweight, pre-configured with required Laravel extensions (`pdo_mysql`, `zip`, `opcache`).
-* **Caddy Web Server:** Handles all web traffic, providing **automatic HTTPS** (via Let's Encrypt in production, self-signed locally) and acting as a reverse proxy to PHP-FPM.
-* **MySQL 8.0:** Dedicated container for database persistence.
-* **One-Command Setup:** Use the provided script to initialize the entire project, including Laravel installation, configuration, and environment variable setup.
-* **Zero Configuration Change for Production:** All environment differences (ports, domains, debug status) are managed via the `.env` file, meaning the core Docker files remain static and committed to Git.
+- **Interactive Setup:** No manual editing of config files needed — the script guides you through the entire process.  
+- **Dockerized Environment:** Fully containerized stack using official images for PHP, Caddy, MySQL 8, and Redis.  
+- **Dual Environment Support:** Easily configure for **local development (HTTP)** or **production (automatic HTTPS via Caddy)**.  
+- **Caddy Web Server:** A modern, powerful web server that automatically handles HTTPS for production deployments.  
+- **Redis Integration:** Preconfigured for caching, session management, and queueing.  
+- **Dedicated Queue Worker:** Includes a separate worker service to process Laravel jobs in the background.  
+- **Developer Tools Included:**
+  - Laravel Horizon — dashboard and code-driven queue configuration.  
+  - Laravel Telescope — elegant debug assistant for local development.  
+- **Secure by Default:** Generates a secure `APP_KEY`, keeps secrets in `.env`, and separates local overrides from base configuration.  
+- **Helpful Aliases:** Suggests convenient shell aliases for running Artisan and Composer inside the container.
 
-***
+---
 
-## 1. Prerequisites
+## 🧱 Prerequisites
 
-You must have the following installed on your local machine:
+Before you begin, ensure you have the following installed:
 
-* **Git**
-* **Docker Engine** (Minimum Version 20.10)
-* **Docker Compose (v2)** (Available via `docker compose` command)
+- A Bash-compatible shell (like **bash** or **zsh**)
+- **Docker Engine:** [Installation Guide](https://docs.docker.com/engine/install/)
+- **Docker Compose:** [Installation Guide](https://docs.docker.com/compose/install/)
 
-***
+The script also relies on `openssl` or `head/base64` to generate the application key — standard tools available on most Linux and macOS systems.
 
-## 2. Project Architecture
+---
 
-The application is split into three core services defined in `docker-compose.yml`:
+## ⚙️ How to Use
 
-| Service | Image/Version | Role | Internal Port |
-| :--- | :--- | :--- | :--- |
-| **`app`** | Custom PHP 8.4 FPM | Runs the Laravel application, Composer, and Artisan commands. | 9000 |
-| **`web`** | `caddy:2-alpine` | Web server, reverse proxy, and **automatic HTTPS/SSL termination**. | 80, 443 |
-| **`db`** | `mysql:8.0` | Persistent MySQL database. | 3306 |
+### 1. Save the Script
+Save the script content to a file named `setup-laravel.sh`.
 
-### Directory Structure
+### 2. Make it Executable
+`chmod +x setup-laravel.sh`
 
+### 3. Run the Script
+Execute the script from the directory where you want to create your project:
+`./setup-laravel.sh`
+
+
+### 4. Follow the Prompts
+
+You’ll be asked for:
+
+- **Project Name:** e.g., `my-blog-app`  
+- **Installation Directory:** defaults to current directory (`.`)  
+- **Deployment Environment:** `local` or `production`  
+- **Domain Name (for production):** e.g., `example.com`  
+- **Host Ports:** for web, DB, and Redis access  
+- **Database Credentials:** username, DB name, and password  
+
+After completion, the script will generate all configuration files, build Docker images, install Laravel, and start the containers.
+
+---
+
+## 📁 Project Structure Explained
+
+Example structure after setup:
 ```text
-.
-├── src/                      # Laravel application files (bind mounted)
+/my-blog-app
 ├── docker/
-│   ├── caddy/
-│   │   └── Caddyfile         # Caddy config for proxying to PHP-FPM
-│   └── php/
-│       └── Dockerfile        # Custom PHP image blueprint
-├── docker-compose.yml        # Orchestration file
-├── .env                      # Local variables (Ignored by Git)
-├── .env.example              # Template for all required variables (Committed)
-└── setup_laravel_docker.sh   # Automation script
+│ ├── caddy/
+│ │ ├── Caddyfile.local
+│ │ └── Caddyfile.production
+│ └── php/
+│   └── Dockerfile
+├── src/ <-- YOUR LARAVEL CODE GOES HERE
+├── .env <-- Contains all secrets. DO NOT COMMIT.
+├── .env.example
+├── .gitignore
+├── docker-compose.yml
+└── docker-compose.override.yml <-- Local-only settings. DO NOT COMMIT.
 ```
 
-***
+**Key Directories:**
 
-## 3. Quick Start (Using the Automation Script)
+- `src/`: Root of your Laravel application.  
+- `docker/`: Contains Dockerfiles and Caddy configurations.  
+- `.env`: Runtime environment variables, including DB credentials and `APP_KEY`.  
+- `docker-compose.yml`: Defines all core services — app, web, db, redis, worker.  
+- `docker-compose.override.yml`: For local development overrides (ignored by Git).
 
-The provided script automates directory creation, file generation, Docker building, and initial Laravel installation.
+---
 
-1.  **Run the script:**
-    ```bash
-    chmod +x setup_laravel_docker.sh
-    ./setup_laravel_docker.sh
-    ```
+## ⚡ Post-Setup Instructions & Common Commands
 
-2.  **Follow the prompts:** The script will ask for:
-    * **Project Name** (e.g., `my-blog-app`)
-    * **Installation Directory** (e.g., `/Users/dev/Code`)
-    * **Host Port** (e.g., `8000`)
-    * **Database Credentials** (Name, User, Password)
+### Accessing Your Application
 
-3.  **Access the Application:** Once the script finishes, your app will be available at:
-    * `http://localhost:<YOUR_HOST_PORT>` (e.g., `http://localhost:8000`)
+- Local URL: `http://localhost:PORT`  
+- Horizon Dashboard: `http://localhost:PORT/horizon`  
+- Telescope Dashboard: `http://localhost:PORT/telescope`
 
-***
+### Database and Redis Connections
 
-## 4. Development Workflow & Shortcuts
+| Service | Host | Port | Credentials            |
+|----------|------|------|------------------------|
+| MySQL    | localhost | e.g., 33061 | Use values set during setup |
+| Redis    | localhost | 6379        | Default or as configured    |
 
-The most efficient way to interact with the containers is by setting up **shell aliases**.
+---
 
-### A. Setup Shell Aliases
+### Essential Docker Commands
 
-Add the following lines to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.). **Be sure to update the `cd` path to your project directory.**
+Run these from your project root (`/my-blog-app`):
 
-```bash
-# Example Aliases (Update the path and project name)
-alias art='cd /path/to/your/project && docker compose exec app php /var/www/src/artisan'
-alias comp='cd /path/to/your/project && docker compose exec app composer'
-```
-
-### B. Usage
-| Task                | Alias Command             | Equivalent Full Command                                         |
-|----------------------|---------------------------|-----------------------------------------------------------------|
-| Run migrations       | `art migrate`             | `docker compose exec app php /var/www/src/artisan migrate`      |
-| Make a model         | `art make:model Post`     | `docker compose exec app php /var/www/src/artisan make:model Post` |
-| Install dependencies | `comp install`            | `docker compose exec app composer install`                      |
-| Run tests            | `art test`                | `docker compose exec app php /var/www/src/artisan test`         |
+#### Stop all containers:
+`docker compose down`
 
 
-
-## 5. Multi-Project Management
-You can run multiple Laravel projects simultaneously with this architecture:
-
-**Service Names:** Keep service names (app, web, db) identical in all projects' docker-compose.yml files. Docker uses the project directory name to prevent container name conflicts.
-
-**Host Port:** Ensure each project uses a unique WEB_HOST_PORT in its respective .env file (e.g., Project A uses 8000, Project B uses 8001).
-
-**Execution:** Always execute docker compose commands from the target project's root directory.
-
-## 6. Deployment to EC2 (Production)
-Deployment requires zero changes to your docker-compose.yml, Dockerfile, or Caddyfile. All modifications are handled via the production .env file.
-
-### A. Production .env Changes
-On your remote server (EC2):
-Manually create a secure production .env file (never commit it to Git).
-Update the critical variables:
-
-| Key           | Local                 | Production                  |
-|---------------|-----------------------|-----------------------------|
-| APP_ENV       | local                 | production                  |
-| APP_DEBUG     | true                  | false                       |
-| WEB_HOST_PORT | 8000                  | 80                          |
-| DOMAIN        | localhost             | your_domain.com             |
-| DB_PASSWORD   | (Simple)              | (Strong, unique secret)     |
-| APP_URL       | http://localhost:8000 | https://your_domain.com     |
+#### Start all containers in the background:
+`docker compose up -d`
 
 
-### B. Execution Steps on the Server
-Clone the repository and cd into the project directory.
-Run the containers and enable Caddy/SSL:
+#### View logs for all services:
+`docker compose logs -f`
 
-```Bash
-docker compose up --build -d
-Caddy automatically requests a Let's Encrypt certificate for the domain specified in the .env file.
-```
 
-Run post-deployment commands:
+#### View logs for a specific service (e.g., app):
+`docker compose logs -f project_app`
 
-```Bash
-# Generate/ensure unique key (if not done previously)
-docker compose exec app php /var/www/src/artisan key:generate
 
-# Run migrations
-docker compose exec app php /var/www/src/artisan migrate --force
+#### Rebuild PHP image after Dockerfile changes(docker/php/Dockerfile):
+`docker compose build`
 
-# Optimize Laravel for performance
-docker compose exec app php /var/www/src/artisan config:cache
-docker compose exec app php /var/www/src/artisan route:cache
-```
+
+#### Manage individual containers:
+- **Stop a specific container: ** `docker compose stop container_name`
+- **Start a specific container: ** `docker compose start container_name`
+- **Restart a specific container: ** `docker compose restart container_name`
+
+
+---
+
+## 🧩 Suggested Shell Aliases
+
+Add the following to your shell config file (`~/.bashrc` or `~/.zshrc`).  
+Replace `/path/to/your/project` with your actual project path.
+
+
+### Laravel Artisan Alias
+`alias art='cd /path/to/your/project && docker compose exec app php /var/www/src/artisan'`
+
+### Composer Alias
+`alias comp='cd /path/to/your/project && docker compose exec app composer'`
+
+
+### Reload your shell:
+`source ~/.bashrc`
+
+
+### Now you can run:
+- ** Run migrations: ** `art migrate`
+- ** Create a new model: ** `art make:model Product`
+- ** Install a new composer package: ** `comp require spatie/laravel-permission`
+
+
+
+---
+
+## 🛡️ Important Notes
+
+- Do **not** commit `.env` or `docker-compose.override.yml`.  
+- Use separate `.env` files for local and production environments.  
+- For production deployments, ensure your domain is correctly configured for HTTPS with Caddy.
+
+---
+
+Made with ❤️ for Laravel developers who want clean, consistent Docker setups.
