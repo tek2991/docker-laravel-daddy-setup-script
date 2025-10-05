@@ -258,7 +258,23 @@ RUN apk update && apk add --no-cache \\
     curl \\
     libxml2-dev \\
     libzip-dev \\
-    && docker-php-ext-install pdo_mysql opcache zip \\
+    nodejs \\
+    npm \\
+    # Install required Alpine packages for extensions
+    freetype-dev \\
+    libpng-dev \\
+    libjpeg-turbo-dev \\
+    icu-dev \\
+    php8-redis \\
+    # Install the main extensions
+    && docker-php-ext-install -j$(nproc) \\
+        bcmath \\
+        curl \\
+        gd \\
+        mbstring \\
+        intl \\
+        pdo_mysql \\
+        zip \\
     && rm -rf /var/cache/apk/*
 
 # Install Composer
