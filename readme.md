@@ -98,6 +98,24 @@ Example structure after setup:
 - Telescope Dashboard: `http://localhost:PORT/telescope`
 - View logs for the worker service: `docker compose logs -f project_worker`
 
+### To enable npm run dev add the following to vite.config.js 
+
+``` text
+    // *** DOCKER-SPECIFIC HMR CONFIGURATION ***
+    server: {
+        // Set the host for the Vite server to 0.0.0.0 to listen on all interfaces
+        host: '0.0.0.0',
+        hmr: {
+            // The client must connect to the host machine's address, not the container's internal IP.
+            // This URL will be embedded in the JS/CSS files to tell the browser where to find the HMR server.
+            host: 'localhost', 
+        },
+        // IMPORTANT: Must also expose this port in docker-compose.yml
+        port: 5173 
+    },
+
+```
+
 ### Database and Redis Connections
 
 | Service | Host | Port | Credentials            |
