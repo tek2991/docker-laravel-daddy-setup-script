@@ -732,5 +732,3 @@ docker compose up -d
 ---
 
 Happy coding! 🚀
-
-If you have any issues, check the troubleshooting section or check container logs with `docker compose logs -f`.
