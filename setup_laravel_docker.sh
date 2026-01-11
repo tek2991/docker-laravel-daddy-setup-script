@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# =============================================================================
+# Laravel Docker Setup Script - LOCAL DEVELOPMENT OPTIMIZED
+# =============================================================================
+# PHP 8.4 | Caddy 2 | MySQL 8.0 | Redis | Horizon | Telescope
+# Optimized for local development with sensible defaults and automation
+# =============================================================================
+
 # --- Configuration (Defaults) ---
 PHP_VERSION="8.4"
 PROJECT_NAME=""
@@ -8,11 +15,10 @@ WEB_HOST_PORT="8000"
 DB_DATABASE="laravel_db"
 DB_USERNAME="docker_user"
 DB_PASSWORD=""
-DEPLOY_ENV="local"
 DOMAIN_NAME="localhost"
-DB_HOST_PORT="33061" # NEW DEFAULT PORT
-REDIS_EXTERNAL_PORT="6379" # Default port exposed to host machine
-LARAVEL_STARTER_KIT="laravel/laravel" # NEW DEFAULT: Standard Laravel
+DB_HOST_PORT="33061"
+REDIS_EXTERNAL_PORT="6379"
+LARAVEL_STARTER_KIT="laravel/laravel"
 
 # --- Functions ---
 
@@ -56,7 +62,7 @@ prompt_for_input() {
     done
 }
 
-# NEW FUNCTION: Prompt user for Laravel starter kit selection
+# Prompt user for Laravel starter kit selection
 prompt_for_starter_kit() {
     echo "--- Select Laravel Starter Kit ---"
     echo "1) laravel/laravel (Default - Basic App Skeleton)"
@@ -66,7 +72,11 @@ prompt_for_starter_kit() {
     
     local choice
     while true; do
-        read -p "Enter selection number (1-4): " choice
+        read -p "Enter selection number (1-4, Default: 1): " choice
+        # Default to 1 if empty
+        if [ -z "$choice" ]; then
+            choice=1
+        fi
         case $choice in
             1) LARAVEL_STARTER_KIT="laravel/laravel"; break ;;
             2) LARAVEL_STARTER_KIT="laravel/livewire-starter-kit"; break ;;
@@ -78,7 +88,7 @@ prompt_for_starter_kit() {
     echo "-> Selected Starter Kit: $LARAVEL_STARTER_KIT"
 }
 
-# Validation for non-empty and existing directory
+# Validation for existing directory
 validate_directory() {
     if [ "$1" == "." ]; then return 0; fi
     if [ ! -d "$1" ]; then
@@ -91,556 +101,710 @@ validate_directory() {
 # Check if Docker is running
 check_docker() {
     if ! command -v docker &> /dev/null; then
-        echo "? ERROR: Docker command not found." ; exit 1
+        echo "❌ ERROR: Docker command not found. Please install Docker first." 
+        exit 1
     fi
     if ! docker info &> /dev/null; then
-        echo "? ERROR: Docker daemon is not running." ; exit 1
+        echo "❌ ERROR: Docker daemon is not running. Please start Docker." 
+        exit 1
     fi
+    echo "✅ Docker is running"
 }
 
 # Wait for the MySQL container to be ready
 wait_for_db() {
-    echo "       -> Waiting for database to become ready (Max 30s)..."
+    echo "   ⏳ Waiting for database to become ready (Max 60s)..."
     local attempts=0
     while ! docker compose exec db mysqladmin ping -h db --silent &> /dev/null; do
         sleep 2
         attempts=$((attempts+1))
-        if [ $attempts -ge 15 ]; then
-            echo "       -> ERROR: Database failed to start within 30 seconds. Check 'docker compose logs db'."
+        if [ $attempts -ge 30 ]; then
+            echo "   ❌ ERROR: Database failed to start within 60 seconds."
+            echo "   💡 Try: docker compose logs db"
             exit 1
         fi
     done
-    echo "       -> Database is ready."
+    echo "   ✅ Database is ready"
 }
 
-# Validation for environment selection
-validate_env() {
-    local env_input=$(echo "$1" | tr '[:upper:]' '[:lower:]')
-    if [[ "$env_input" != "local" && "$env_input" != "production" ]]; then
-        echo "Invalid choice. Please enter 'local' or 'production'."
-        return 1
+# Detect user's shell configuration file
+detect_shell_config() {
+    if [ -n "$ZSH_VERSION" ]; then
+        echo "$HOME/.zshrc"
+    elif [ -n "$BASH_VERSION" ]; then
+        if [ -f "$HOME/.bashrc" ]; then
+            echo "$HOME/.bashrc"
+        elif [ -f "$HOME/.bash_profile" ]; then
+            echo "$HOME/.bash_profile"
+        fi
     fi
-    return 0
 }
 
 # --- Main Script ---
 
+clear
 echo "==================================================="
-echo "       Laravel Docker Setup Script (PHP $PHP_VERSION, Caddy)"
+echo "   🚀 Laravel Docker Setup - Local Development"
 echo "==================================================="
+echo "   PHP $PHP_VERSION | Caddy | MySQL | Redis"
+echo "   Horizon + Telescope Pre-configured"
+echo "==================================================="
+echo ""
 
 # 1. Get Project Details
 prompt_for_input "Enter the **Project Name** (e.g., my-blog-app)" "PROJECT_NAME" "" "" "false"
 prompt_for_input "Enter the **Installation Directory**" "INSTALL_DIR" validate_directory "." "false"
 
-# NEW STEP: Prompt for starter kit selection
+# 2. Select Laravel Starter Kit
+echo ""
 prompt_for_starter_kit
 
-# 2. Get Custom Credentials and Environment
-echo "--- Customizing Environment Variables ---"
-prompt_for_input "Enter the **Deployment Environment** ('local' or 'production')" "DEPLOY_ENV" validate_env "$DEPLOY_ENV" "false"
+# 3. Get Port Configuration
+echo ""
+echo "--- Port Configuration ---"
+prompt_for_input "Enter the **Host Port** for HTTP access" "WEB_HOST_PORT" "" "$WEB_HOST_PORT" "false"
+prompt_for_input "Enter the **Host Port** for Database access" "DB_HOST_PORT" "" "$DB_HOST_PORT" "false"
+prompt_for_input "Enter the **Host Port** for Redis access" "REDIS_EXTERNAL_PORT" "" "$REDIS_EXTERNAL_PORT" "false"
 
-if [[ "$DEPLOY_ENV" == "production" ]]; then
-    prompt_for_input "Enter the **Domain Name** (e.g., myapp.com) for Caddy" "DOMAIN_NAME" "" "" "false"
-    WEB_HOST_PORT="443" # Force standard HTTPS port
-    echo "       -> Setting Host Port to 443 (HTTPS) for production."
-else
-    prompt_for_input "Enter the **Host Port** for HTTP access" "WEB_HOST_PORT" "" "$WEB_HOST_PORT" "false"
-    DOMAIN_NAME="localhost" # Ensure it is set to localhost
-fi
-
+# 4. Get Database Configuration
+echo ""
 echo "--- Database Configuration ---"
-prompt_for_input "Enter the **Host Port** for Database access (Default: 33061)" "DB_HOST_PORT" "" "$DB_HOST_PORT" "false"
 prompt_for_input "Enter the **Database Name**" "DB_DATABASE" "" "$DB_DATABASE" "false"
 prompt_for_input "Enter the **Database User**" "DB_USERNAME" "" "$DB_USERNAME" "false"
-prompt_for_input "Enter the **Database Password** (REQUIRED)" "DB_PASSWORD" "" "" "true" 
-
-echo "--- Redis Configuration ---"
-# NEW PROMPT for the external host port
-prompt_for_input "Enter the **Host Port** for Redis access (External/GUI Tools)" "REDIS_EXTERNAL_PORT" "" "$REDIS_EXTERNAL_PORT" "false"
+prompt_for_input "Enter the **Database Password** (for local dev)" "DB_PASSWORD" "" "" "true"
 
 PROJECT_DIR="$INSTALL_DIR/$PROJECT_NAME"
 
-# 3. Check and Create Project Directory
+# 5. Check and Create Project Directory
+echo ""
 if [ -d "$PROJECT_DIR" ]; then
-    read -r -p "Directory '$PROJECT_DIR' already exists. Overwrite contents? (y/N): " response
+    read -r -p "⚠️  Directory '$PROJECT_DIR' already exists. Overwrite? (y/N): " response
     case "$response" in
         [yY][eE][sS]|[yY]) echo "Proceeding..." ;;
-        *) echo "Aborting setup." ; exit 1 ;;
+        *) echo "❌ Aborting setup." ; exit 1 ;;
     esac
 else
-    echo "Creating project directory: $PROJECT_DIR"
+    echo "📁 Creating project directory: $PROJECT_DIR"
     mkdir -p "$PROJECT_DIR"
 fi
 
 cd "$PROJECT_DIR" || exit
 
 # --- Generate APP_KEY ---
-echo "--- Generating Cryptographically Secure APP_KEY in Bash ---"
+echo ""
+echo "🔑 Generating secure APP_KEY..."
 if command -v openssl &> /dev/null; then
     APP_KEY_BASH_GENERATED="base64:$(openssl rand -base64 32 | tr -d '\n')"
-    echo "       -> Key generated using OpenSSL."
+    echo "   ✅ Key generated using OpenSSL"
 elif command -v head &> /dev/null && command -v base64 &> /dev/null; then
     APP_KEY_BASH_GENERATED="base64:$(head /dev/urandom | base64 | tr -d '\n' | head -c 44)"
-    echo "       -> Key generated using head/base64 fallback."
+    echo "   ✅ Key generated using head/base64"
 else
-    echo "? ERROR: Neither openssl nor base64 utilities found to generate APP_KEY. Aborting."
+    echo "❌ ERROR: Neither openssl nor base64 found. Cannot generate APP_KEY."
     exit 1
 fi
 
-# Determine Caddyfile to use based on environment
-CADDY_CONFIG_FILE="Caddyfile.$DEPLOY_ENV"
-
-# 4. Create Blueprints and Configuration Files
-echo "Creating subdirectories and configuration files..."
+# 6. Create Project Structure
+echo ""
+echo "📦 Creating project structure..."
 mkdir -p src docker/php docker/caddy
 
-# --- A. .env (Contains Secrets and now Redis config)
+# --- A. .env (Local Development Configuration)
 cat << EOF > .env
-# --- Host/Network Configuration ---
+# =================================================
+# LOCAL DEVELOPMENT ENVIRONMENT
+# =================================================
+
+# --- Network Configuration ---
 WEB_HOST_PORT=$WEB_HOST_PORT
 DOMAIN=$DOMAIN_NAME
 
 # --- Database Configuration ---
 DB_CONNECTION=mysql
 DB_HOST=db
-# The internal port used by the app container
 DB_PORT=3306
-# The host port used for external connections is $DB_HOST_PORT
 DB_DATABASE=$DB_DATABASE
 DB_USERNAME=$DB_USERNAME
 DB_PASSWORD=$DB_PASSWORD
 
-# --- Database Configuration (MySQL Container Initialization) ---
-# NOTE: These variables are required by the 'mysql:8.0' image entrypoint.
+# --- MySQL Container Initialization ---
 MYSQL_ROOT_PASSWORD=$DB_PASSWORD
 MYSQL_DATABASE=$DB_DATABASE
 MYSQL_USER=$DB_USERNAME
 MYSQL_PASSWORD=$DB_PASSWORD
 
-# --- Laravel Application Configuration ---
-APP_ENV=$DEPLOY_ENV
+# --- Laravel Application ---
+APP_NAME=$PROJECT_NAME
+APP_ENV=local
+APP_KEY=$APP_KEY_BASH_GENERATED
 APP_DEBUG=true
-APP_URL=http://$DOMAIN_NAME:\${WEB_HOST_PORT}
-APP_KEY=$APP_KEY_BASH_GENERATED 
+APP_TIMEZONE=UTC
+APP_URL=http://$DOMAIN_NAME:$WEB_HOST_PORT
+
+LOG_CHANNEL=stack
+LOG_LEVEL=debug
 
 # --- Redis Configuration ---
-# 'redis' is the service name defined in docker-compose.yml
-# The internal port used by the app container is 6379 (standard Redis port).
 REDIS_HOST=redis
 REDIS_PORT=6379
-REDIS_PASSWORD=
+REDIS_PASSWORD=null
 
-# --- Laravel Driver Configuration (Enabled Redis Features) ---
+# --- Cache, Session, Queue (Using Redis) ---
 CACHE_DRIVER=redis
 SESSION_DRIVER=redis
+SESSION_LIFETIME=120
 QUEUE_CONNECTION=redis
-EOF
-echo "       -> Created .env file with secrets and Redis configuration."
-unset DB_PASSWORD
 
-# --- B. .env.example (No Secrets)
+# --- Mail (Log driver for local dev) ---
+MAIL_MAILER=log
+
+# --- Vite ---
+VITE_APP_NAME="\${APP_NAME}"
+EOF
+echo "   ✅ Created .env file"
+
+# --- B. .env.example
 cat << EOF > .env.example
-# --- Host/Network Configuration ---
+# =================================================
+# ENVIRONMENT CONFIGURATION TEMPLATE
+# =================================================
+# Copy this file to .env and fill in your values
+
+# --- Network Configuration ---
 WEB_HOST_PORT=$WEB_HOST_PORT
 DOMAIN=$DOMAIN_NAME
 
 # --- Database Configuration ---
 DB_CONNECTION=mysql
 DB_HOST=db
-# The internal port used by the app container
 DB_PORT=3306
-# The host port used for external connections is $DB_HOST_PORT
 DB_DATABASE=$DB_DATABASE
 DB_USERNAME=$DB_USERNAME
 DB_PASSWORD=
 
-# --- Database Configuration (MySQL Container Initialization) ---
-# NOTE: These variables are required by the 'mysql:8.0' image entrypoint.
+# --- MySQL Container Initialization ---
 MYSQL_ROOT_PASSWORD=
 MYSQL_DATABASE=$DB_DATABASE
 MYSQL_USER=$DB_USERNAME
 MYSQL_PASSWORD=
 
-# --- Laravel Application Configuration ---
-APP_ENV=$DEPLOY_ENV
-APP_DEBUG=true
-APP_URL=http://\${DOMAIN}:\${WEB_HOST_PORT}
+# --- Laravel Application ---
+APP_NAME=$PROJECT_NAME
+APP_ENV=local
 APP_KEY=
+APP_DEBUG=true
+APP_TIMEZONE=UTC
+APP_URL=http://\${DOMAIN}:\${WEB_HOST_PORT}
+
+LOG_CHANNEL=stack
+LOG_LEVEL=debug
 
 # --- Redis Configuration ---
 REDIS_HOST=redis
 REDIS_PORT=6379
-REDIS_PASSWORD=
+REDIS_PASSWORD=null
 
-# --- Laravel Driver Configuration ---
+# --- Cache, Session, Queue ---
 CACHE_DRIVER=redis
 SESSION_DRIVER=redis
+SESSION_LIFETIME=120
 QUEUE_CONNECTION=redis
+
+# --- Mail ---
+MAIL_MAILER=log
+
+# --- Vite ---
+VITE_APP_NAME="\${APP_NAME}"
 EOF
-echo "       -> Created clean .env.example file."
+echo "   ✅ Created .env.example"
 
 # --- C. .gitignore
 cat << EOF > .gitignore
-# Sensitive Data
+# Environment & Secrets
 .env
+.env.backup
 
 # Docker Local Overrides
 docker-compose.override.yml
-docker-compose.production.yml
 
-# Laravel Build Artifacts
+# Laravel
 /vendor
 /node_modules
-/storage
-/bootstrap/cache/*.php
+/public/hot
+/public/storage
+/storage/*.key
+/storage/app/*
+!/storage/app/.gitignore
+/storage/framework/cache/*
+!/storage/framework/cache/.gitignore
+/storage/framework/sessions/*
+!/storage/framework/sessions/.gitignore
+/storage/framework/views/*
+!/storage/framework/views/.gitignore
+/storage/logs/*
+!/storage/logs/.gitignore
+/bootstrap/cache/*
+!/bootstrap/cache/.gitignore
 
-# Docker Volumes/Logs
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker Volumes
 db-data
 caddy_data
 redis-data
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+EOF
+echo "   ✅ Created .gitignore"
+
+# --- D. .dockerignore
+cat << EOF > .dockerignore
+.git
+.gitignore
+.env
+.env.example
+node_modules
+vendor
+storage/logs
+storage/framework/cache
+storage/framework/sessions
+storage/framework/views
+.DS_Store
+Thumbs.db
 *.log
 EOF
+echo "   ✅ Created .dockerignore"
 
-# --- D. docker/php/Dockerfile (No change, Redis extension already installed)
+# --- E. docker/php/Dockerfile
 cat << EOF > docker/php/Dockerfile
 FROM php:${PHP_VERSION}-fpm-alpine
 
-# Install all dependencies and extensions in a single, clean, chained RUN command.
+# Install system dependencies and PHP extensions
 RUN set -eux; \
-apk add --no-cache \
-git \
-curl \
-libxml2-dev \
-libzip-dev \
-oniguruma-dev \
-nodejs \
-npm \
-supervisor \
-postgresql-dev \
-libpng \
-libjpeg-turbo \
-freetype \
-&& apk add --no-cache --virtual .build-deps \
-autoconf \
-g++ \
-make \
-pcre-dev \
-freetype-dev \
-libpng-dev \
-libjpeg-turbo-dev \
-icu-dev \
-curl-dev \
-linux-headers \
-&& docker-php-ext-install -j\$(nproc) \
-bcmath \
-curl \
-gd \
-intl \
-mbstring \
-pcntl \
-pdo_mysql \
-pdo_pgsql \
-sockets \
-zip \
-&& pecl install redis \
-&& docker-php-ext-enable redis \
-&& apk del .build-deps \
-&& rm -rf /var/cache/apk/* /tmp/pear
+    apk add --no-cache \
+        git \
+        curl \
+        libxml2-dev \
+        libzip-dev \
+        oniguruma-dev \
+        nodejs \
+        npm \
+        postgresql-dev \
+        libpng \
+        libjpeg-turbo \
+        freetype \
+    && apk add --no-cache --virtual .build-deps \
+        autoconf \
+        g++ \
+        make \
+        pcre-dev \
+        freetype-dev \
+        libpng-dev \
+        libjpeg-turbo-dev \
+        icu-dev \
+        curl-dev \
+        linux-headers \
+    && docker-php-ext-install -j\$(nproc) \
+        bcmath \
+        curl \
+        gd \
+        intl \
+        mbstring \
+        pcntl \
+        pdo_mysql \
+        pdo_pgsql \
+        sockets \
+        zip \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apk del .build-deps \
+    && rm -rf /var/cache/apk/* /tmp/pear
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
 
+# Set working directory
 WORKDIR /var/www
+
+# Expose PHP-FPM port
 EXPOSE 9000
+
+CMD ["php-fpm"]
 EOF
-echo "       -> Created docker/php/Dockerfile."
+echo "   ✅ Created docker/php/Dockerfile"
 
-
-# --- E. docker/caddy/Caddyfile.local
-cat << EOF > docker/caddy/Caddyfile.local
+# --- F. docker/caddy/Caddyfile (Local Development)
+cat << EOF > docker/caddy/Caddyfile
 :80 {
-    # 1. Set the root to the application's public folder
+    # Root directory
     root * /var/www/src/public
 
-    # 2. Caddy's dedicated PHP directive automatically handles
-    # the try_files logic: it checks if the requested file exists, 
-    # serves it if it does, otherwise it rewrites to index.php.
+    # PHP-FPM configuration
     php_fastcgi app:9000
 
-    # 3. Explicitly enable the file server. 
-    # Caddy is smart enough to serve files that exist before proxying.
+    # Serve static files
     file_server
 
-    # Additional Directives
+    # Enable gzip compression
     encode gzip
-    log
+
+    # Logging
+    log {
+        output stdout
+        level INFO
+    }
 }
 EOF
+echo "   ✅ Created docker/caddy/Caddyfile"
 
-# --- F. docker/caddy/Caddyfile.production
-cat << EOF > docker/caddy/Caddyfile.production
-${DOMAIN} {
-    # Caddy handles automatic HTTPS using the domain from the .env file
-    # and redirects HTTP (port 80) to HTTPS (port 443)
-    
-    # 1. Set the root to the public directory
-    root * /var/www/src/public
-    
-    # 2. Add the file_server directive to handle static assets
-    # This must come before (or be correctly handled by) the PHP proxy.
-    file_server 
-
-    # 3. Use the php_fastcgi directive to handle dynamic requests.
-    # This directive implicitly includes the necessary "try_files" logic 
-    # to send non-existing files to index.php.
-    php_fastcgi app:9000
-    
-    # Other Directives
-    encode gzip
-    log
-}
-EOF
-
-# --- G. docker-compose.yml (Added Redis service and volume, and the new Worker service)
+# --- G. docker-compose.yml
 cat << EOF > docker-compose.yml
 services:
-    # 1. PHP Application Service (app)
-    app:
-        build:
-            context: ./docker/php
-            dockerfile: Dockerfile
-        # REMARK: Unique name for this project's app container
-        container_name: ${PROJECT_NAME}_app
-        working_dir: /var/www/src/
-        volumes:
-            - ./src:/var/www/src
-        # Expose Vite port internally to the docker network
-        expose:
-            - "5173"
-        # REMARK: Loads application environment variables from the .env file
-        env_file:
-            - .env
-        networks:
-            - laravel-net
+  # PHP Application
+  app:
+    build:
+      context: ./docker/php
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME}_app
+    restart: unless-stopped
+    working_dir: /var/www/src
+    volumes:
+      - ./src:/var/www/src
+    expose:
+      - "5173"
+    env_file:
+      - .env
+    networks:
+      - laravel-net
+    depends_on:
+      - db
+      - redis
 
-    # 2. Caddy Web Server Service (web)
-    web:
-        image: caddy:2-alpine
-        # REMARK: Unique name for this project's web container
-        container_name: ${PROJECT_NAME}_web
-        ports:
-            # LOCAL USE: This port is mapped in the local override file.
-            # PRODUCTION CHANGE: UNCOMMENT '80:80' and ensure '443:443' is kept.
-            # - "80:80"
-            - "443:443"
-        volumes:
-            - ./src:/var/www/src
-            # DYNAMIC MOUNT: Caddyfile used is determined by DEPLOY_ENV variable.
-            - ./docker/caddy/$CADDY_CONFIG_FILE:/etc/caddy/Caddyfile 
-            - caddy_data:/data
-        environment:
-            # PRODUCTION CHANGE: Set the live domain name in your production .env file.
-            DOMAIN: ${DOMAIN_NAME}
-        depends_on:
-            - app
-        networks:
-            - laravel-net
+  # Caddy Web Server
+  web:
+    image: caddy:2-alpine
+    container_name: ${PROJECT_NAME}_web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./src:/var/www/src
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - laravel-net
 
-    # 3. Database Service (db)
-    db:
-        image: mysql:8.0
-        # REMARK: Unique name for this project's database container
-        container_name: ${PROJECT_NAME}_db
-        # PORTS ARE REMOVED HERE and defined in the local override/production file for security.
-        # PRODUCTION CHANGE: REMOVE the entire 'ports' section for security.
-        # ports:
-            # - "\${DB_HOST_PORT:-33061}:3306"
-        
-        # REMARK: Loads all DB credentials from the .env file.
-        env_file:
-            - .env
-        
-        volumes:
-            - db-data:/var/lib/mysql
-        networks:
-            - laravel-net
+  # MySQL Database
+  db:
+    image: mysql:8.0
+    container_name: ${PROJECT_NAME}_db
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - db-data:/var/lib/mysql
+    networks:
+      - laravel-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-    # 4. Redis Caching/Queue Service (redis)
-    redis:
-        image: redis:alpine
-        # REMARK: Unique name for this project's redis container
-        container_name: ${PROJECT_NAME}_redis
-        volumes:
-            - redis-data:/data
-        networks:
-            - laravel-net
+  # Redis Cache/Queue
+  redis:
+    image: redis:alpine
+    container_name: ${PROJECT_NAME}_redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - laravel-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-    # 5. Laravel Queue Worker Service (worker)
-    worker:
-        build:
-            context: ./docker/php
-            dockerfile: Dockerfile
-        # REMARK: Unique name for this project's worker container
-        container_name: ${PROJECT_NAME}_worker
-        working_dir: /var/www/src/
-        volumes:
-            - ./src:/var/www/src
-        # COMMAND: Run the Laravel queue worker continuously.
-        # --verbose shows job logs; --tries=3 retries failures; --timeout=90 sets a job limit.
-        command: php artisan queue:work --verbose --tries=3 --timeout=90
-        env_file:
-            - .env
-        depends_on:
-            - app
-            - redis # Worker must wait for redis to be ready to process jobs
-        networks:
-            - laravel-net
-            
+  # Laravel Queue Worker
+  worker:
+    build:
+      context: ./docker/php
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME}_worker
+    restart: unless-stopped
+    working_dir: /var/www/src
+    volumes:
+      - ./src:/var/www/src
+    command: php artisan queue:work --verbose --tries=3 --timeout=90
+    env_file:
+      - .env
+    depends_on:
+      - app
+      - redis
+      - db
+    networks:
+      - laravel-net
+
 networks:
-    laravel-net:
-        driver: bridge
+  laravel-net:
+    driver: bridge
 
 volumes:
-    db-data:
-        driver: local
-    caddy_data:
-        driver: local
-    redis-data:
-        driver: local
+  db-data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+  redis-data:
+    driver: local
 EOF
-echo "       -> Created all Caddy, Docker Compose (with Redis and Worker), and Volume files."
+echo "   ✅ Created docker-compose.yml"
 
-
-# --- H. docker-compose.override.yml (The local file, IGNORED by Git)
+# --- H. docker-compose.override.yml (Local port mappings)
 cat << EOF > docker-compose.override.yml
-# This file overrides the base docker-compose.yml with local, user-specific settings.
-# It should be EXCLUDED from version control via .gitignore.
+# =================================================
+# LOCAL DEVELOPMENT OVERRIDES
+# =================================================
+# This file is excluded from version control
+# It exposes ports for local development tools
 
 services:
-    # 1. PHP Application Service (app)
-    app:
-        ports:
-            # REMARK: Exposes Vite HMR internal port (5173) to the host machine for dev.
-            - "5173:5173"
+  app:
+    ports:
+      # Vite HMR
+      - "5173:5173"
 
-    # 2. Caddy Web Server Service (web)
-    web:
-        ports:
-            # REMARK: Overrides the host port for local HTTP access.
-            - "${WEB_HOST_PORT}:80"
+  web:
+    ports:
+      # HTTP (overrides the base file for custom port)
+      - "${WEB_HOST_PORT}:80"
 
-    # 3. Database Service (db)
-    db:
-        ports:
-            # REMARK: Exposes the DB internal port (3306) to the host machine (for tools).
-            - "${DB_HOST_PORT}:3306"
+  db:
+    ports:
+      # MySQL (for database GUI tools)
+      - "${DB_HOST_PORT}:3306"
 
-    # 4. Redis Caching/Queue Service (redis)
-    redis:
-        ports:
-            # REMARK: Exposes the Redis internal port (6379) to the host machine (for GUI tools).
-            - "${REDIS_EXTERNAL_PORT}:6379"
+  redis:
+    ports:
+      # Redis (for Redis GUI tools)
+      - "${REDIS_EXTERNAL_PORT}:6379"
 EOF
-echo "       -> Created docker-compose.override.yml for local settings."
+echo "   ✅ Created docker-compose.override.yml"
 
-# 5. Execute Setup Commands
-echo "--- Checking Docker Status ---"
+# --- 7. Execute Setup Commands ---
+echo ""
+echo "==================================================="
+echo "🐳 Starting Docker Setup"
+echo "==================================================="
+
 check_docker
 
-echo "--- Executing Docker Setup Commands ---"
+echo ""
+echo "📦 Step 1: Building custom PHP image..."
+docker compose build --no-cache
 
-# 1. Build Image (This will now work)
-echo "1. Building the custom PHP image..."
-docker compose build
-
-# 2. Create Laravel Project (Uses the selected LARAVEL_STARTER_KIT variable)
-echo "2. Running Composer to create the Laravel project using: $LARAVEL_STARTER_KIT..."
-# We run composer in the 'app' container which has the PHP image built.
-# Use --no-scripts to prevent the post-install scripts (like key:generate) from running
-# and causing warnings, as we handle the environment configuration externally.
+echo ""
+echo "📦 Step 2: Creating Laravel project ($LARAVEL_STARTER_KIT)..."
 docker compose run --rm app composer create-project "$LARAVEL_STARTER_KIT" /var/www/src --no-scripts
 
-# 2.1. Copy the full host-generated .env (with APP_KEY and DB credentials) into the
-# Laravel source root so 'artisan' and other commands inside the container can access it.
-echo "2.1. Copying host-generated .env into Laravel source directory..."
+echo ""
+echo "📦 Step 3: Copying environment configuration..."
 cp .env ./src/.env
 
-# NPM INSTALL
-echo "2.2. Installing front-end dependencies with npm..."
-# We use 'docker compose run' again to execute npm in the same temporary container
+echo ""
+echo "📦 Step 4: Installing NPM dependencies..."
 docker compose run --rm app npm install
 
-# 2.3. Install Laravel Horizon
-echo "2.3. Installing Laravel Horizon for queue monitoring..."
-docker compose run --rm app composer require laravel/horizon
+echo ""
+echo "📦 Step 5: Installing Laravel Horizon (Queue Monitoring)..."
+docker compose run --rm app composer require laravel/horizon --quiet
 
-# 2.4. Publish Horizon Assets and Configuration
-echo "2.4. Publishing Horizon assets and configuration..."
-docker compose run --rm app php /var/www/src/artisan horizon:install
+echo ""
+echo "📦 Step 6: Installing Laravel Telescope (Debugging)..."
+docker compose run --rm app composer require laravel/telescope --quiet
 
-# 2.5. Install Laravel Telescope
-echo "2.5. Installing Laravel Telescope for general debugging..."
-docker compose run --rm app composer require laravel/telescope
-
-# 2.6. Publish Telescope Assets and Configuration
-echo "2.6. Publishing Telescope assets and configuration..."
-docker compose run --rm app php /var/www/src/artisan telescope:install
-
-
-# 3. Start Containers (Single Run)
-echo "3. Starting services (app, web, db, redis, worker) in detached mode..."
+echo ""
+echo "🚀 Step 7: Starting all services..."
 docker compose up -d
 
-# 4. Clear config cache and set Permissions
-echo "4. Clearing config cache and fixing directory permissions..."
+echo ""
+echo "⏳ Step 8: Waiting for services to be ready..."
+sleep 5
+
+echo ""
+echo "📦 Step 9: Publishing Horizon assets..."
+docker compose exec app php /var/www/src/artisan horizon:install --quiet
+
+echo ""
+echo "📦 Step 10: Publishing Telescope assets..."
+docker compose exec app php /var/www/src/artisan telescope:install --quiet
+
+echo ""
+echo "🔧 Step 11: Configuring Vite for Docker..."
+# Auto-configure vite.config.js for Docker HMR
+cat << 'VITE_EOF' > src/vite.config.js
+import { defineConfig } from 'vite';
+import laravel from 'laravel-vite-plugin';
+
+export default defineConfig({
+    plugins: [
+        laravel({
+            input: ['resources/css/app.css', 'resources/js/app.js'],
+            refresh: true,
+        }),
+    ],
+    server: {
+        host: '0.0.0.0',
+        port: 5173,
+        hmr: {
+            host: 'localhost'
+        },
+        watch: {
+            usePolling: true
+        }
+    }
+});
+VITE_EOF
+echo "   ✅ Vite configured for Docker HMR"
+
+echo ""
+echo "🔧 Step 12: Setting up storage and permissions..."
+docker compose exec app php /var/www/src/artisan storage:link
+docker compose exec app chown -R www-data:www-data /var/www/src/storage /var/www/src/bootstrap/cache
+docker compose exec app chmod -R 775 /var/www/src/storage /var/www/src/bootstrap/cache
+echo "   ✅ Storage linked and permissions set"
+
+echo ""
+echo "🔧 Step 13: Clearing configuration cache..."
 docker compose exec app php /var/www/src/artisan config:clear
 
-# Set Permissions
-docker compose exec app chmod -R 777 /var/www/src/storage /var/www/src/bootstrap/cache
-
-# 5. Prompt for Migrations (Database wait is essential here)
-read -r -p "5. Do you want to run database migrations now? (y/N): " run_migrations
+# Prompt for migrations
+echo ""
+read -r -p "📊 Run database migrations now? (y/N): " run_migrations
 if [[ "$run_migrations" =~ ^[yY]$ ]]; then
-    wait_for_db 
-    echo "       -> Running migrations (includes Horizon and Telescope tables)..."
-    docker compose exec app php /var/www/src/artisan migrate
+    wait_for_db
+    echo ""
+    echo "🔄 Running migrations (includes Horizon and Telescope)..."
+    docker compose exec app php /var/www/src/artisan migrate --force
+    echo "   ✅ Migrations completed"
 else
-    echo "       -> Skipping migrations."
+    echo "   ⏭️  Skipping migrations (run manually later)"
 fi
 
-# 6. Final Instructions
-echo "==================================================="
-echo "? SETUP COMPLETE! Your project is ready."
-echo "==================================================="
-echo "Project Location: $PROJECT_DIR"
-if [[ "$DEPLOY_ENV" == "production" ]]; then
-    echo "Access URL: https://$DOMAIN_NAME"
-else
-    echo "Access URL: http://localhost:$WEB_HOST_PORT"
-    # Provide the dashboard URLs
-    echo "Horizon Dashboard: http://localhost:$WEB_HOST_PORT/horizon"
-    echo "Telescope Dashboard: http://localhost:$WEB_HOST_PORT/telescope"
+# --- Add helpful aliases ---
+echo ""
+SHELL_CONFIG=$(detect_shell_config)
+if [ -n "$SHELL_CONFIG" ]; then
+    read -r -p "🔧 Add helpful aliases to $SHELL_CONFIG? (y/N): " add_aliases
+    if [[ "$add_aliases" =~ ^[yY]$ ]]; then
+        cat << ALIAS_EOF >> "$SHELL_CONFIG"
+
+# ===== Laravel Docker Aliases for $PROJECT_NAME =====
+alias ${PROJECT_NAME}-art='cd $PROJECT_DIR && docker compose exec app php /var/www/src/artisan'
+alias ${PROJECT_NAME}-composer='cd $PROJECT_DIR && docker compose exec app composer'
+alias ${PROJECT_NAME}-npm='cd $PROJECT_DIR && docker compose exec app npm'
+alias ${PROJECT_NAME}-test='cd $PROJECT_DIR && docker compose exec app php /var/www/src/artisan test'
+alias ${PROJECT_NAME}-shell='cd $PROJECT_DIR && docker compose exec app sh'
+alias ${PROJECT_NAME}-logs='cd $PROJECT_DIR && docker compose logs -f'
+alias ${PROJECT_NAME}-up='cd $PROJECT_DIR && docker compose up -d'
+alias ${PROJECT_NAME}-down='cd $PROJECT_DIR && docker compose down'
+alias ${PROJECT_NAME}-restart='cd $PROJECT_DIR && docker compose restart'
+ALIAS_EOF
+        echo "   ✅ Aliases added! Run: source $SHELL_CONFIG"
+    fi
 fi
-echo "Environment: $DEPLOY_ENV"
-echo "Starter Kit: $LARAVEL_STARTER_KIT"
-echo "---------------------------------------------------"
-echo "DATABASE HOST CONNECTION DETAILS:"
-echo "Host: localhost"
-echo "Port: $DB_HOST_PORT"
-echo "User: $DB_USERNAME"
-echo "---------------------------------------------------"
-echo "REDIS HOST CONNECTION DETAILS (External/GUI Tools):"
-echo "Host: localhost"
-echo "Port: $REDIS_EXTERNAL_PORT"
-echo "---------------------------------------------------"
-echo "NEXT STEPS:"
-echo "1. Source your shell profile (e.g., ~/.bashrc or ~/.zshrc) after adding aliases."
-    echo "       alias art='cd $PROJECT_DIR && docker compose exec app php /var/www/src/artisan'"
-    echo "       alias comp='cd $PROJECT_DIR && docker compose exec app composer'"
-echo "2. Start coding in the '$PROJECT_DIR/src' directory!"
-echo "3. To stop: docker compose down (This stops app, web, db, redis, and worker)"
-echo "4. IMPORTANT: You must manually update your 'src/vite.config.js' for HMR to work correctly in Docker. You need to set host: '0.0.0.0' and hmr.host: 'localhost'."
-echo "5. To run the Vite server: docker compose exec app npm run dev"
+
+# --- Final Success Message ---
+echo ""
+echo "==================================================="
+echo "✨ SETUP COMPLETE! Your Laravel project is ready!"
+echo "==================================================="
+echo ""
+echo "📁 Project Location:"
+echo "   $PROJECT_DIR"
+echo ""
+echo "🌐 Access URLs:"
+echo "   Application:  http://localhost:$WEB_HOST_PORT"
+echo "   Horizon:      http://localhost:$WEB_HOST_PORT/horizon"
+echo "   Telescope:    http://localhost:$WEB_HOST_PORT/telescope"
+echo ""
+echo "🔌 Database Connection (for GUI tools):"
+echo "   Host:     localhost"
+echo "   Port:     $DB_HOST_PORT"
+echo "   Database: $DB_DATABASE"
+echo "   Username: $DB_USERNAME"
+echo ""
+echo "🔴 Redis Connection (for GUI tools):"
+echo "   Host:     localhost"
+echo "   Port:     $REDIS_EXTERNAL_PORT"
+echo ""
+echo "📦 Starter Kit: $LARAVEL_STARTER_KIT"
+echo ""
+echo "==================================================="
+echo "🚀 QUICK START COMMANDS"
+echo "==================================================="
+echo ""
+echo "Start Vite dev server (for hot reload):"
+echo "   cd $PROJECT_DIR"
+echo "   docker compose exec app npm run dev"
+echo ""
+echo "Run artisan commands:"
+echo "   docker compose exec app php /var/www/src/artisan [command]"
+echo ""
+echo "Run migrations:"
+echo "   docker compose exec app php /var/www/src/artisan migrate"
+echo ""
+echo "View logs:"
+echo "   docker compose logs -f"
+echo ""
+echo "Stop all services:"
+echo "   docker compose down"
+echo ""
+echo "Restart services:"
+echo "   docker compose restart"
+echo ""
+echo "Access container shell:"
+echo "   docker compose exec app sh"
+echo ""
+if [ -n "$SHELL_CONFIG" ] && [[ "$add_aliases" =~ ^[yY]$ ]]; then
+    echo "==================================================="
+    echo "🎯 CUSTOM ALIASES (After sourcing shell config)"
+    echo "==================================================="
+    echo ""
+    echo "   ${PROJECT_NAME}-art [command]    - Run artisan commands"
+    echo "   ${PROJECT_NAME}-composer [cmd]   - Run composer commands"
+    echo "   ${PROJECT_NAME}-npm [command]    - Run npm commands"
+    echo "   ${PROJECT_NAME}-test             - Run PHPUnit tests"
+    echo "   ${PROJECT_NAME}-shell            - Access container shell"
+    echo "   ${PROJECT_NAME}-logs             - Follow container logs"
+    echo "   ${PROJECT_NAME}-up               - Start services"
+    echo "   ${PROJECT_NAME}-down             - Stop services"
+    echo "   ${PROJECT_NAME}-restart          - Restart services"
+    echo ""
+    echo "💡 Don't forget to run: source $SHELL_CONFIG"
+    echo ""
+fi
+echo "==================================================="
+echo "Happy coding! 🎉"
+echo "==================================================="
 
 exit 0
