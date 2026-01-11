@@ -183,7 +183,73 @@ Make sure `APP_KEY` is already present (it should be from your Linux setup).
 
 Save and exit (Ctrl+X, Y, Enter)
 
-#### 4.2 Start Docker Services
+#### 4.2 Verify Docker Compose Files
+
+Your project should have these Docker Compose files from the setup script:
+
+**`docker-compose.yml`** - Base configuration (committed to Git)
+- Defines all services (app, web, db, redis, worker)
+- Does NOT expose ports to host (for security in production)
+
+**`docker-compose.override.yml`** - Local development overrides (NOT in Git)
+- Exposes ports to your host machine for local development
+- **Port mappings:**
+  - `${WEB_HOST_PORT}:80` - Access your Laravel app
+  - `${DB_HOST_PORT}:3306` - Connect to MySQL with GUI tools
+  - `${REDIS_EXTERNAL_PORT}:6379` - Connect to Redis with GUI tools
+  - `5173:5173` - Vite HMR (hot module replacement)
+
+**Important:** The `docker-compose.override.yml` file should already exist in your cloned repo. If it's missing, create it:
+
+```bash
+# Check if it exists
+ls -la docker-compose.override.yml
+
+# If missing, create it manually:
+nano docker-compose.override.yml
+```
+
+Paste this content:
+
+```yaml
+# This file overrides the base docker-compose.yml with local, user-specific settings.
+# It should be EXCLUDED from version control via .gitignore.
+
+services:
+    # 1. PHP Application Service (app)
+    app:
+        ports:
+            # REMARK: Exposes Vite HMR internal port (5173) to the host machine for dev.
+            - "5173:5173"
+
+    # 2. Caddy Web Server Service (web)
+    web:
+        ports:
+            # REMARK: Overrides the host port for local HTTP access.
+            - "${WEB_HOST_PORT}:80"
+
+    # 3. Database Service (db)
+    db:
+        ports:
+            # REMARK: Exposes the DB internal port (3306) to the host machine (for tools).
+            - "${DB_HOST_PORT}:3306"
+
+    # 4. Redis Caching/Queue Service (redis)
+    redis:
+        ports:
+            # REMARK: Exposes the Redis internal port (6379) to the host machine (for GUI tools).
+            - "${REDIS_EXTERNAL_PORT}:6379"
+```
+
+Save and exit (Ctrl+X, Y, Enter)
+
+**Why this file matters:**
+- Without it, you can't access your app from Windows browser
+- Without it, database GUI tools (like MySQL Workbench) can't connect
+- Without it, Vite hot reload won't work
+- It's in `.gitignore` because different developers might want different ports
+
+#### 4.3 Start Docker Services
 
 ```bash
 # Start all Docker containers
@@ -562,8 +628,79 @@ sudo lsof -i :8000
 nano .env
 # Change WEB_HOST_PORT=8080
 
+# After changing .env, restart containers
 docker compose down
 docker compose up -d
+```
+
+### Issue: Can't access app from Windows browser
+
+**Problem:** Visiting `http://localhost:8000` shows "connection refused"
+
+**Solution:**
+```bash
+# Verify docker-compose.override.yml exists
+ls -la docker-compose.override.yml
+
+# If missing, create it (see Step 4.2 in Part 1)
+
+# Check if ports are actually mapped
+docker compose ps
+
+# Look for web service showing something like:
+# 0.0.0.0:8000->80/tcp
+
+# If not showing, recreate containers
+docker compose down
+docker compose up -d
+```
+
+### Issue: MySQL Workbench / Database GUI can't connect
+
+**Problem:** Connection refused when trying to connect from Windows
+
+**Solution:**
+```bash
+# Verify database port is exposed
+docker compose ps
+
+# Look for db service showing:
+# 0.0.0.0:33061->3306/tcp (or your DB_HOST_PORT)
+
+# If not showing, check docker-compose.override.yml exists
+# and has the db ports section
+
+# Connection details for GUI tools:
+# Host: localhost (or 127.0.0.1)
+# Port: 33061 (or your DB_HOST_PORT from .env)
+# Username: docker_user (or your DB_USERNAME from .env)
+# Password: (your DB_PASSWORD from .env)
+```
+
+### Issue: Vite HMR not working from Windows browser
+
+**Problem:** Vite dev server running but hot reload doesn't work
+
+**Solution:**
+```bash
+# Check if port 5173 is exposed
+docker compose ps
+
+# Look for app service showing:
+# 0.0.0.0:5173->5173/tcp
+
+# Verify vite.config.js has correct settings
+cat src/vite.config.js
+
+# Should contain:
+# server: {
+#     host: '0.0.0.0',
+#     port: 5173,
+#     hmr: { host: 'localhost' }
+# }
+
+# Restart Vite
+docker compose exec app npm run dev
 ```
 
 ### Issue: Database connection refused
@@ -670,8 +807,10 @@ docker compose up -d
 - [ ] Keychain installed and configured
 - [ ] Git configured with SSH
 - [ ] Repository cloned
+- [ ] `docker-compose.override.yml` file exists (verify with `ls -la`)
 - [ ] `.env` file created with DB password
 - [ ] `docker compose up -d` successful
+- [ ] Ports are exposed (verify with `docker compose ps`)
 - [ ] Dependencies installed (composer & npm)
 - [ ] Permissions fixed
 - [ ] Migrations run
@@ -729,6 +868,24 @@ docker compose up -d
    cd /mnt/c/Users/YourName/Documents
    ```
 
+7. **Understand the Docker Compose file structure:**
+   - `docker-compose.yml` = Base config (version controlled)
+   - `docker-compose.override.yml` = Local overrides (NOT version controlled, enables port access)
+   - Both files work together automatically when you run `docker compose up`
+
+8. **Verify port mappings:**
+   ```bash
+   # Quick check to see what ports are exposed
+   docker compose ps
+   
+   # You should see ports like:
+   # 0.0.0.0:8000->80/tcp (web access)
+   # 0.0.0.0:33061->3306/tcp (database)
+   # 0.0.0.0:5173->5173/tcp (Vite HMR)
+   ```
+
 ---
 
 Happy coding! 🚀
+
+If you have any issues, check the troubleshooting section or check container logs with `docker compose logs -f`.
